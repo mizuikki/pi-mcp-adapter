@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model, Models } from "@earendil-works/pi-ai";
 import type { CreateMessageRequest, ModelPreferences } from "@modelcontextprotocol/sdk/types.js";
 import type { SamplingHandlerOptions } from "../sampling-handler.ts";
 
@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   complete: vi.fn(),
 }));
 
-vi.mock("@earendil-works/pi-ai", () => ({
+vi.mock("@earendil-works/pi-ai/compat", () => ({
   complete: mocks.complete,
 }));
 
@@ -54,21 +54,35 @@ const geminiFlash = {
   baseUrl: "https://generativelanguage.googleapis.com",
 } satisfies Model<"google-generative-ai">;
 
+type SamplingTestModelRegistry = Pick<
+  SamplingHandlerOptions["modelRegistry"],
+  "getAvailable" | "getApiKeyAndHeaders"
+> & Partial<Pick<SamplingHandlerOptions["modelRegistry"], "getExplicitModelsSource" | "getExplicitModel">>;
+
 type SamplingTestOptions = Omit<SamplingHandlerOptions, "modelRegistry"> & {
-  modelRegistry: Pick<SamplingHandlerOptions["modelRegistry"], "getAvailable" | "getApiKeyAndHeaders">;
+  modelRegistry: SamplingTestModelRegistry;
 };
 
 function createOptions(overrides: Partial<SamplingTestOptions> = {}): SamplingHandlerOptions {
+  const defaultModelRegistry = {
+    getAvailable: vi.fn(async () => [model]),
+    getApiKeyAndHeaders: vi.fn(async () => ({
+      ok: true,
+      apiKey: "key",
+      headers: { "x-test": "1" },
+      env: { TEST_ENV: "1" },
+    })),
+    getExplicitModelsSource: vi.fn(() => undefined),
+    getExplicitModel: vi.fn(() => undefined),
+  } satisfies Required<SamplingTestModelRegistry>;
+  const { modelRegistry, ...rest } = overrides;
   const options = {
     serverName: "i18n",
     autoApprove: true,
-    modelRegistry: {
-      getAvailable: vi.fn(() => [model]),
-      getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key", headers: { "x-test": "1" } })),
-    },
+    modelRegistry: { ...defaultModelRegistry, ...modelRegistry },
     getCurrentModel: vi.fn(() => undefined),
     getSignal: vi.fn(() => undefined),
-    ...overrides,
+    ...rest,
   } satisfies SamplingTestOptions;
   return options as SamplingHandlerOptions;
 }
@@ -128,6 +142,7 @@ describe("sampling handler", () => {
       {
         apiKey: "key",
         headers: { "x-test": "1" },
+        env: { TEST_ENV: "1" },
         maxTokens: 50,
         temperature: 0.2,
         metadata: { locale: "fr" },
@@ -140,6 +155,298 @@ describe("sampling handler", () => {
       model: "anthropic/claude-sonnet",
       stopReason: "endTurn",
     });
+  });
+
+  it("routes explicit Models providers through their Models collection", async () => {
+    const { handleSamplingRequest } = await import("../sampling-handler.ts");
+    const explicitModel = {
+      ...model,
+      provider: "explicit-faux",
+      id: "custom-model",
+      name: "Custom Model",
+    } satisfies Model<"anthropic-messages">;
+    const explicitAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "Explicit Bonjour" }],
+      api: "anthropic-messages",
+      provider: "explicit-faux",
+      model: "custom-model",
+      usage,
+      stopReason: "stop",
+      timestamp: 1,
+    } satisfies AssistantMessage;
+    const completeSimple = vi.fn(async () => explicitAssistant);
+    const explicitModels = {
+      getProvider: vi.fn((provider: string) => (provider === "explicit-faux" ? { id: provider } : undefined)),
+      getModel: vi.fn((provider: string, id: string) =>
+        provider === "explicit-faux" && id === "custom-model" ? explicitModel : undefined,
+      ),
+      completeSimple,
+    } as unknown as Models;
+
+    const result = await handleSamplingRequest(
+      createOptions({
+        modelRegistry: {
+          getAvailable: vi.fn(async () => [explicitModel]),
+          getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, headers: { Authorization: "Bearer token" } })),
+          getExplicitModelsSource: vi.fn(() => explicitModels),
+        },
+      }),
+      createSamplingRequest({
+        systemPrompt: "Translate tersely.",
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        maxTokens: 50,
+      }),
+    );
+
+    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(completeSimple).toHaveBeenCalledWith(
+      explicitModel,
+      {
+        systemPrompt: "Translate tersely.",
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Hello" }],
+            timestamp: expect.any(Number),
+          },
+        ],
+      },
+      {
+        apiKey: undefined,
+        headers: { Authorization: "Bearer token" },
+        env: undefined,
+        maxTokens: 50,
+        temperature: undefined,
+        metadata: undefined,
+        signal: undefined,
+      },
+    );
+    expect(result).toEqual({
+      role: "assistant",
+      content: { type: "text", text: "Explicit Bonjour" },
+      model: "explicit-faux/custom-model",
+      stopReason: "endTurn",
+    });
+  });
+
+  it("uses the host registry explicit model overlay when available", async () => {
+    const { handleSamplingRequest } = await import("../sampling-handler.ts");
+    const explicitModel = {
+      ...model,
+      provider: "explicit-faux",
+      id: "custom-model",
+      baseUrl: "http://overlay.local",
+    } satisfies Model<Api>;
+    const rawExplicitModel = {
+      ...explicitModel,
+      baseUrl: "http://raw.local",
+    } satisfies Model<Api>;
+    const completeSimple = vi.fn(async () => ({
+      role: "assistant",
+      content: [{ type: "text", text: "Overlay Bonjour" }],
+      api: explicitModel.api,
+      provider: explicitModel.provider,
+      model: explicitModel.id,
+      usage,
+      stopReason: "stop",
+      timestamp: 1,
+    } satisfies AssistantMessage));
+    const explicitModels = {
+      getProvider: vi.fn((provider: string) => (provider === "explicit-faux" ? { id: provider } : undefined)),
+      getModel: vi.fn((provider: string, id: string) =>
+        provider === "explicit-faux" && id === "custom-model" ? rawExplicitModel : undefined,
+      ),
+      completeSimple,
+    } as unknown as Models;
+
+    await handleSamplingRequest(
+      createOptions({
+        modelRegistry: {
+          getAvailable: vi.fn(async () => [explicitModel]),
+          getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
+          getExplicitModelsSource: vi.fn(() => explicitModels),
+          getExplicitModel: vi.fn((provider: string, id: string) =>
+            provider === "explicit-faux" && id === "custom-model" ? explicitModel : undefined,
+          ),
+        },
+      }),
+      createSamplingRequest({
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        maxTokens: 50,
+      }),
+    );
+
+    expect(completeSimple).toHaveBeenCalledWith(
+      explicitModel,
+      {
+        systemPrompt: undefined,
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Hello" }],
+            timestamp: expect.any(Number),
+          },
+        ],
+      },
+      {
+        apiKey: "key",
+        headers: undefined,
+        env: undefined,
+        maxTokens: 50,
+        temperature: undefined,
+        metadata: undefined,
+        signal: undefined,
+      },
+    );
+    expect(mocks.complete).not.toHaveBeenCalled();
+  });
+
+  it("falls back to compat completion when getExplicitModel returns a non-owned overlay", async () => {
+    const { handleSamplingRequest } = await import("../sampling-handler.ts");
+    const overlayModel = {
+      ...model,
+      provider: "overlay-only",
+      id: "overlay-model",
+      baseUrl: "http://overlay.local",
+    } satisfies Model<Api>;
+    const completeSimple = vi.fn();
+    const explicitModels = {
+      getProvider: vi.fn(() => undefined),
+      getModel: vi.fn(() => undefined),
+      completeSimple,
+    } as unknown as Models;
+
+    await handleSamplingRequest(
+      createOptions({
+        modelRegistry: {
+          getAvailable: vi.fn(async () => [overlayModel]),
+          getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
+          getExplicitModelsSource: vi.fn(() => explicitModels),
+          getExplicitModel: vi.fn(() => overlayModel),
+        },
+      }),
+      createSamplingRequest({
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        maxTokens: 50,
+      }),
+    );
+
+    expect(completeSimple).not.toHaveBeenCalled();
+    expect(mocks.complete).toHaveBeenCalledWith(
+      overlayModel,
+      {
+        systemPrompt: undefined,
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Hello" }],
+            timestamp: expect.any(Number),
+          },
+        ],
+      },
+      {
+        apiKey: "key",
+        headers: undefined,
+        env: undefined,
+        maxTokens: 50,
+        temperature: undefined,
+        metadata: undefined,
+        signal: undefined,
+      },
+    );
+  });
+
+  it("falls back to compat completion when only the provider id matches an explicit Models source", async () => {
+    const { handleSamplingRequest } = await import("../sampling-handler.ts");
+    const completeSimple = vi.fn();
+    const explicitModels = {
+      getProvider: vi.fn((provider: string) => (provider === "anthropic" ? { id: provider } : undefined)),
+      getModel: vi.fn(() => undefined),
+      completeSimple,
+    } as unknown as Models;
+
+    await handleSamplingRequest(
+      createOptions({
+        modelRegistry: {
+          getAvailable: vi.fn(async () => [model]),
+          getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
+          getExplicitModelsSource: vi.fn(() => explicitModels),
+        },
+      }),
+      createSamplingRequest({
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        maxTokens: 50,
+      }),
+    );
+
+    expect(completeSimple).not.toHaveBeenCalled();
+    expect(mocks.complete).toHaveBeenCalledWith(
+      model,
+      {
+        systemPrompt: undefined,
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Hello" }],
+            timestamp: expect.any(Number),
+          },
+        ],
+      },
+      {
+        apiKey: "key",
+        headers: undefined,
+        env: undefined,
+        maxTokens: 50,
+        temperature: undefined,
+        metadata: undefined,
+        signal: undefined,
+      },
+    );
+  });
+
+  it("falls back to compat completion when the Pi host lacks explicit Models support", async () => {
+    const { handleSamplingRequest } = await import("../sampling-handler.ts");
+
+    await handleSamplingRequest(
+      {
+        serverName: "i18n",
+        autoApprove: true,
+        modelRegistry: {
+          getAvailable: vi.fn(async () => [model]),
+          getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
+        } as SamplingHandlerOptions["modelRegistry"],
+        getCurrentModel: vi.fn(() => undefined),
+        getSignal: vi.fn(() => undefined),
+      },
+      createSamplingRequest({
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        maxTokens: 50,
+      }),
+    );
+
+    expect(mocks.complete).toHaveBeenCalledWith(
+      model,
+      {
+        systemPrompt: undefined,
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: "Hello" }],
+            timestamp: expect.any(Number),
+          },
+        ],
+      },
+      {
+        apiKey: "key",
+        headers: undefined,
+        env: undefined,
+        maxTokens: 50,
+        temperature: undefined,
+        metadata: undefined,
+        signal: undefined,
+      },
+    );
   });
 
   it("requires UI approval unless auto-approve is enabled", async () => {
@@ -173,7 +480,7 @@ describe("sampling handler", () => {
   it("uses model preference hints before the current conversation model", async () => {
     await runBasicSampling({
       modelRegistry: {
-        getAvailable: vi.fn(() => [haiku, opus]),
+        getAvailable: vi.fn(async () => [haiku, opus]),
         getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
       },
       getCurrentModel: vi.fn(() => opus),
@@ -185,7 +492,7 @@ describe("sampling handler", () => {
   it("matches model preference hints case-insensitively after trimming", async () => {
     await runBasicSampling({
       modelRegistry: {
-        getAvailable: vi.fn(() => [haiku, opus]),
+        getAvailable: vi.fn(async () => [haiku, opus]),
         getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
       },
       getCurrentModel: vi.fn(() => opus),
@@ -197,7 +504,7 @@ describe("sampling handler", () => {
   it("matches model preference hints against display names", async () => {
     await runBasicSampling({
       modelRegistry: {
-        getAvailable: vi.fn(() => [geminiFlash, opus]),
+        getAvailable: vi.fn(async () => [geminiFlash, opus]),
         getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
       },
       getCurrentModel: vi.fn(() => opus),
@@ -209,7 +516,7 @@ describe("sampling handler", () => {
   it("matches model preference hints against provider/id", async () => {
     await runBasicSampling({
       modelRegistry: {
-        getAvailable: vi.fn(() => [geminiFlash, opus]),
+        getAvailable: vi.fn(async () => [geminiFlash, opus]),
         getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
       },
       getCurrentModel: vi.fn(() => opus),
@@ -221,7 +528,7 @@ describe("sampling handler", () => {
   it("preserves preference order across multiple model hints", async () => {
     await runBasicSampling({
       modelRegistry: {
-        getAvailable: vi.fn(() => [haiku, geminiFlash, opus]),
+        getAvailable: vi.fn(async () => [haiku, geminiFlash, opus]),
         getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
       },
       getCurrentModel: vi.fn(() => opus),
@@ -238,7 +545,7 @@ describe("sampling handler", () => {
 
     await runBasicSampling({
       modelRegistry: {
-        getAvailable: vi.fn(() => [haiku, opus]),
+        getAvailable: vi.fn(async () => [haiku, opus]),
         getApiKeyAndHeaders,
       },
       getCurrentModel: vi.fn(() => opus),
@@ -252,7 +559,7 @@ describe("sampling handler", () => {
   it("preserves current-model-first selection when no hints are provided", async () => {
     await runBasicSampling({
       modelRegistry: {
-        getAvailable: vi.fn(() => [haiku]),
+        getAvailable: vi.fn(async () => [haiku]),
         getApiKeyAndHeaders: vi.fn(async () => ({ ok: true, apiKey: "key" })),
       },
       getCurrentModel: vi.fn(() => opus),

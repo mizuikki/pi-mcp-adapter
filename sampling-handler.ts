@@ -1,4 +1,5 @@
-import { complete, type Api, type AssistantMessage, type Message, type Model, type TextContent } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Context, Message, Model, Models, SimpleStreamOptions, TextContent } from "@earendil-works/pi-ai";
+import { complete } from "@earendil-works/pi-ai/compat";
 import { truncateAtWord } from "./utils.ts";
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -51,14 +52,15 @@ export async function handleSamplingRequest(
   }
 
   const messages = params.messages.map(convertSamplingMessage);
-  const { model, apiKey, headers } = await resolveSamplingModel(options, params.modelPreferences);
+  const { model, apiKey, headers, env } = await resolveSamplingModel(options, params.modelPreferences);
   await confirmSampling(
     options,
     "Approve MCP sampling request",
     formatRequestApproval(options.serverName, `${model.provider}/${model.id}`, params.systemPrompt, messages),
   );
 
-  const result = await complete(
+  const result = await completeSamplingModel(
+    options.modelRegistry,
     model,
     {
       systemPrompt: params.systemPrompt,
@@ -67,6 +69,7 @@ export async function handleSamplingRequest(
     {
       apiKey,
       headers,
+      env,
       maxTokens: params.maxTokens,
       temperature: params.temperature,
       metadata: params.metadata as Record<string, unknown> | undefined,
@@ -81,6 +84,47 @@ export async function handleSamplingRequest(
     formatResponseApproval(options.serverName, converted),
   );
   return converted;
+}
+
+async function completeSamplingModel(
+  modelRegistry: ModelRegistry,
+  model: Model<Api>,
+  context: Context,
+  requestOptions: SimpleStreamOptions,
+): Promise<AssistantMessage> {
+  const explicitModels = getExplicitModelsSource(modelRegistry);
+  const explicitModel = getExplicitSamplingModel(modelRegistry, model, explicitModels);
+  const ownedExplicitModel = explicitModels?.getProvider(model.provider)
+    ? explicitModels.getModel(model.provider, model.id)
+    : undefined;
+  if (explicitModels && explicitModel && ownedExplicitModel) {
+    return explicitModels.completeSimple(explicitModel, context, requestOptions);
+  }
+  return complete(model, context, requestOptions);
+}
+
+function getExplicitSamplingModel(
+  modelRegistry: ModelRegistry,
+  model: Model<Api>,
+  explicitModels: Models | undefined,
+): Model<Api> | undefined {
+  const candidate = modelRegistry as ModelRegistry & {
+    getExplicitModel?: (provider: string, id: string) => Model<Api> | undefined;
+  };
+  if (typeof candidate.getExplicitModel === "function") {
+    const explicitModel = candidate.getExplicitModel(model.provider, model.id);
+    if (explicitModel) {
+      return explicitModel;
+    }
+  }
+  return explicitModels?.getModel(model.provider, model.id);
+}
+
+function getExplicitModelsSource(modelRegistry: ModelRegistry): Models | undefined {
+  const candidate = modelRegistry as ModelRegistry & {
+    getExplicitModelsSource?: () => Models | undefined;
+  };
+  return typeof candidate.getExplicitModelsSource === "function" ? candidate.getExplicitModelsSource() : undefined;
 }
 
 function formatRequestApproval(
@@ -122,9 +166,10 @@ async function resolveSamplingModel(
   model: Model<Api>;
   apiKey?: string;
   headers?: Record<string, string>;
+  env?: Record<string, string>;
 }> {
   const candidates: Model<Api>[] = [];
-  const availableModels = options.modelRegistry.getAvailable();
+  const availableModels = await options.modelRegistry.getAvailable();
 
   for (const hint of modelPreferences?.hints ?? []) {
     const normalizedHint = hint.name?.trim().toLowerCase();
@@ -151,7 +196,7 @@ async function resolveSamplingModel(
       errors.push(`${model.provider}/${model.id}: ${auth.error}`);
       continue;
     }
-    return { model, apiKey: auth.apiKey, headers: auth.headers };
+    return { model, apiKey: auth.apiKey, headers: auth.headers, env: auth.env };
   }
 
   if (errors.length > 0) {
