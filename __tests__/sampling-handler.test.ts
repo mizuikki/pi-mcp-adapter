@@ -4,11 +4,11 @@ import type { CreateMessageRequest, ModelPreferences } from "@modelcontextprotoc
 import type { SamplingHandlerOptions } from "../sampling-handler.ts";
 
 const mocks = vi.hoisted(() => ({
-  complete: vi.fn(),
+  completeSimple: vi.fn(),
 }));
 
 vi.mock("@earendil-works/pi-ai/compat", () => ({
-  complete: mocks.complete,
+  completeSimple: mocks.completeSimple,
 }));
 
 const usage = {
@@ -111,7 +111,7 @@ function createStreamResult(message: AssistantMessage) {
 
 describe("sampling handler", () => {
   beforeEach(() => {
-    mocks.complete.mockReset().mockResolvedValue({
+    mocks.completeSimple.mockReset().mockResolvedValue({
       role: "assistant",
       content: [{ type: "text", text: "Bonjour" }],
       api: "anthropic-messages",
@@ -133,7 +133,7 @@ describe("sampling handler", () => {
       metadata: { locale: "fr" },
     }));
 
-    expect(mocks.complete).toHaveBeenCalledWith(
+    expect(mocks.completeSimple).toHaveBeenCalledWith(
       model,
       {
         systemPrompt: "Translate tersely.",
@@ -200,7 +200,7 @@ describe("sampling handler", () => {
       }),
     );
 
-    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
     expect(streamSimple).toHaveBeenCalledWith(
       dynamicModel,
       {
@@ -248,7 +248,7 @@ describe("sampling handler", () => {
       }),
     );
 
-    expect(mocks.complete).toHaveBeenCalledWith(
+    expect(mocks.completeSimple).toHaveBeenCalledWith(
       model,
       {
         systemPrompt: undefined,
@@ -289,7 +289,7 @@ describe("sampling handler", () => {
       }),
     );
 
-    expect(mocks.complete).toHaveBeenCalledWith(
+    expect(mocks.completeSimple).toHaveBeenCalledWith(
       model,
       {
         systemPrompt: undefined,
@@ -320,7 +320,7 @@ describe("sampling handler", () => {
       createOptions({ autoApprove: false, ui: undefined }),
       createSamplingRequest({ messages: [], maxTokens: 50 }),
     )).rejects.toThrow("MCP sampling requires interactive approval");
-    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
   });
 
   it("asks for approval with inspectable request and response content", async () => {
@@ -350,7 +350,7 @@ describe("sampling handler", () => {
       getCurrentModel: vi.fn(() => opus),
     }, { hints: [{ name: "haiku" }] });
 
-    expect(mocks.complete.mock.calls[0][0]).toBe(haiku);
+    expect(mocks.completeSimple.mock.calls[0][0]).toBe(haiku);
   });
 
   it("matches model preference hints case-insensitively after trimming", async () => {
@@ -362,7 +362,7 @@ describe("sampling handler", () => {
       getCurrentModel: vi.fn(() => opus),
     }, { hints: [{ name: " HAIKU " }] });
 
-    expect(mocks.complete.mock.calls[0][0]).toBe(haiku);
+    expect(mocks.completeSimple.mock.calls[0][0]).toBe(haiku);
   });
 
   it("matches model preference hints against display names", async () => {
@@ -374,7 +374,7 @@ describe("sampling handler", () => {
       getCurrentModel: vi.fn(() => opus),
     }, { hints: [{ name: "2.5 Flash" }] });
 
-    expect(mocks.complete.mock.calls[0][0]).toBe(geminiFlash);
+    expect(mocks.completeSimple.mock.calls[0][0]).toBe(geminiFlash);
   });
 
   it("matches model preference hints against provider/id", async () => {
@@ -386,7 +386,7 @@ describe("sampling handler", () => {
       getCurrentModel: vi.fn(() => opus),
     }, { hints: [{ name: "google/gemini" }] });
 
-    expect(mocks.complete.mock.calls[0][0]).toBe(geminiFlash);
+    expect(mocks.completeSimple.mock.calls[0][0]).toBe(geminiFlash);
   });
 
   it("preserves preference order across multiple model hints", async () => {
@@ -398,7 +398,7 @@ describe("sampling handler", () => {
       getCurrentModel: vi.fn(() => opus),
     }, { hints: [{ name: "gemini" }, { name: "haiku" }] });
 
-    expect(mocks.complete.mock.calls[0][0]).toBe(geminiFlash);
+    expect(mocks.completeSimple.mock.calls[0][0]).toBe(geminiFlash);
   });
 
   it("falls back when hinted models do not have configured auth", async () => {
@@ -417,7 +417,7 @@ describe("sampling handler", () => {
 
     expect(getApiKeyAndHeaders).toHaveBeenNthCalledWith(1, haiku);
     expect(getApiKeyAndHeaders).toHaveBeenNthCalledWith(2, opus);
-    expect(mocks.complete.mock.calls[0][0]).toBe(opus);
+    expect(mocks.completeSimple.mock.calls[0][0]).toBe(opus);
   });
 
   it("preserves current-model-first selection when no hints are provided", async () => {
@@ -429,7 +429,7 @@ describe("sampling handler", () => {
       getCurrentModel: vi.fn(() => opus),
     });
 
-    expect(mocks.complete.mock.calls[0][0]).toBe(opus);
+    expect(mocks.completeSimple.mock.calls[0][0]).toBe(opus);
   });
 
   it("rejects unsupported sampling features loudly", async () => {
@@ -451,6 +451,6 @@ describe("sampling handler", () => {
       includeContext: "thisServer",
     }))).rejects.toThrow("MCP sampling context inclusion is not supported");
 
-    expect(mocks.complete).not.toHaveBeenCalled();
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
   });
 });

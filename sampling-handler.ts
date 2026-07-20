@@ -4,11 +4,10 @@ import type {
   Context,
   Message,
   Model,
-  ProviderStreamOptions,
   SimpleStreamOptions,
   TextContent,
 } from "@earendil-works/pi-ai";
-import { complete } from "@earendil-works/pi-ai/compat";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 import { truncateAtWord } from "./utils.ts";
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -105,7 +104,7 @@ async function completeSamplingModel(
   if (registered?.streamSimple) {
     return registered.streamSimple(model, context, requestOptions).result();
   }
-  return complete(model, context, requestOptions as ProviderStreamOptions);
+  return completeSimple(model, context, requestOptions);
 }
 
 function formatRequestApproval(
