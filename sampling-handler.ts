@@ -1,4 +1,13 @@
-import type { Api, AssistantMessage, Context, Message, Model, Models, SimpleStreamOptions, TextContent } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  AssistantMessage,
+  Context,
+  Message,
+  Model,
+  ProviderStreamOptions,
+  SimpleStreamOptions,
+  TextContent,
+} from "@earendil-works/pi-ai";
 import { complete } from "@earendil-works/pi-ai/compat";
 import { truncateAtWord } from "./utils.ts";
 import type { ExtensionUIContext, ModelRegistry } from "@earendil-works/pi-coding-agent";
@@ -92,39 +101,11 @@ async function completeSamplingModel(
   context: Context,
   requestOptions: SimpleStreamOptions,
 ): Promise<AssistantMessage> {
-  const explicitModels = getExplicitModelsSource(modelRegistry);
-  const explicitModel = getExplicitSamplingModel(modelRegistry, model, explicitModels);
-  const ownedExplicitModel = explicitModels?.getProvider(model.provider)
-    ? explicitModels.getModel(model.provider, model.id)
-    : undefined;
-  if (explicitModels && explicitModel && ownedExplicitModel) {
-    return explicitModels.completeSimple(explicitModel, context, requestOptions);
+  const registered = modelRegistry.getRegisteredProviderConfig(model.provider);
+  if (registered?.streamSimple) {
+    return registered.streamSimple(model, context, requestOptions).result();
   }
-  return complete(model, context, requestOptions);
-}
-
-function getExplicitSamplingModel(
-  modelRegistry: ModelRegistry,
-  model: Model<Api>,
-  explicitModels: Models | undefined,
-): Model<Api> | undefined {
-  const candidate = modelRegistry as ModelRegistry & {
-    getExplicitModel?: (provider: string, id: string) => Model<Api> | undefined;
-  };
-  if (typeof candidate.getExplicitModel === "function") {
-    const explicitModel = candidate.getExplicitModel(model.provider, model.id);
-    if (explicitModel) {
-      return explicitModel;
-    }
-  }
-  return explicitModels?.getModel(model.provider, model.id);
-}
-
-function getExplicitModelsSource(modelRegistry: ModelRegistry): Models | undefined {
-  const candidate = modelRegistry as ModelRegistry & {
-    getExplicitModelsSource?: () => Models | undefined;
-  };
-  return typeof candidate.getExplicitModelsSource === "function" ? candidate.getExplicitModelsSource() : undefined;
+  return complete(model, context, requestOptions as ProviderStreamOptions);
 }
 
 function formatRequestApproval(

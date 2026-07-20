@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Target Pi `0.80.10` and route MCP sampling for registered dynamic providers through `ModelRegistry.getRegisteredProviderConfig(...).streamSimple`, falling back to `@earendil-works/pi-ai/compat` `complete` for ordinary providers.
+
 ## [2.10.0] - 2026-06-13
 
 ### Added
