@@ -22,7 +22,7 @@ But the MCP ecosystem has useful stuff - databases, browsers, APIs. This adapter
 pi install npm:pi-mcp-adapter
 ```
 
-Restart Pi after installation. `pi-mcp-adapter` targets Pi `0.80.10` and newer.
+Restart Pi after installation. `pi-mcp-adapter` targets Pi `0.81.1` and newer.
 
 ## What happens on first run
 
