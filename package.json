@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:oauth-provider": "node --import tsx --test mcp-oauth-provider.test.ts"
+    "test:oauth-provider": "node --import tsx --test mcp-oauth-provider.test.ts",
+    "test:pi-fork": "node scripts/test-pi-fork.mjs"
   },
   "repository": {
     "type": "git",
@@ -83,8 +84,8 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@earendil-works/pi-ai": "0.80.10",
-    "@earendil-works/pi-tui": "0.80.10",
+    "@earendil-works/pi-ai": "0.81.1",
+    "@earendil-works/pi-tui": "0.81.1",
     "@modelcontextprotocol/ext-apps": "^1.2.2",
     "@modelcontextprotocol/sdk": "^1.25.1",
     "open": "^10.2.0",
@@ -96,7 +97,7 @@
     "zod": "^3.25.0 || ^4.0.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "0.80.10",
+    "@earendil-works/pi-coding-agent": "0.81.1",
     "@types/bun": "^1.0.0",
     "@types/node": "^20.0.0",
     "@types/open": "^6.2.1",
