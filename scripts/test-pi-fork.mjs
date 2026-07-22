@@ -91,6 +91,36 @@ function writeCapabilityProbe(probePath) {
   );
 }
 
+function pinPackedPiDependencies(projectPath, packedPackages) {
+  const packageJsonPath = join(projectPath, "package.json");
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+
+  for (const { name, tarball } of packedPackages) {
+    const dependencyGroup = Object.hasOwn(packageJson.dependencies ?? {}, name)
+      ? packageJson.dependencies
+      : (packageJson.devDependencies ??= {});
+    dependencyGroup[name] = `file:${tarball}`;
+  }
+
+  writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
+}
+
+function verifyPackedPiDependencies(projectPath, packedPackages) {
+  const lockfile = JSON.parse(readFileSync(join(projectPath, "package-lock.json"), "utf8"));
+
+  for (const { name, tarball } of packedPackages) {
+    const lockEntry = lockfile.packages?.[`node_modules/${name}`];
+    if (typeof lockEntry?.resolved !== "string" || !lockEntry.resolved.startsWith("file:")) {
+      throw new Error(`Pi package did not resolve from a local tarball: ${name}`);
+    }
+    const resolvedTarball = resolve(projectPath, decodeURIComponent(lockEntry.resolved.slice("file:".length)));
+    if (resolvedTarball !== tarball) {
+      throw new Error(`Pi package resolved from the wrong tarball: ${name} -> ${resolvedTarball}`);
+    }
+    console.log(`packed ${name}: ${lockEntry.resolved}`);
+  }
+}
+
 const { piDir, piRef } = parseArguments(process.argv.slice(2));
 const tempRoot = mkdtempSync(join(tmpdir(), "pi-mcp-adapter-fork-"));
 const forkDir = join(tempRoot, "pi-fork");
@@ -143,13 +173,13 @@ try {
     ], { cwd: join(forkDir, "packages", workspace), stdio: "ignore" });
   }
 
-  const tarballs = workspaces.map((workspace) => {
+  const packedPackages = workspaces.map((workspace) => {
     const packageDirectory = join(forkDir, "packages", workspace);
     const packageJson = JSON.parse(readFileSync(join(packageDirectory, "package.json"), "utf8"));
     const tarballName = `${packageJson.name.slice(1).replace("/", "-")}-${packageJson.version}.tgz`;
-    return join(tarballDir, tarballName);
+    return { name: packageJson.name, tarball: join(tarballDir, tarballName) };
   });
-  for (const tarball of tarballs) {
+  for (const { tarball } of packedPackages) {
     if (!existsSync(tarball)) {
       throw new Error(`Expected Pi tarball missing: ${tarball}`);
     }
@@ -160,9 +190,10 @@ try {
     filter: (source) => !excludedPaths.has(basename(source)),
   });
 
-  console.log("Installing the isolated adapter copy and replacing its Pi packages with fork tarballs.");
+  pinPackedPiDependencies(projectCopy, packedPackages);
+  console.log("Installing the isolated adapter copy with Pi dependencies pinned to fork tarballs.");
   run(npm, ["install", "--ignore-scripts", "--prefix", projectCopy]);
-  run(npm, ["install", "--ignore-scripts", "--no-save", "--prefix", projectCopy, ...tarballs]);
+  verifyPackedPiDependencies(projectCopy, packedPackages);
 
   const probePath = join(projectCopy, "verify-pi-provenance.mjs");
   writeCapabilityProbe(probePath);
