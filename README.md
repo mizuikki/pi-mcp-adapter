@@ -23,8 +23,10 @@ pi install -l /absolute/path/to/pi-mcp-adapter
 ```
 
 Restart Pi after installation. This extension requires the sibling private Pi
-fork SDK at `0.81.1-local.1`; upstream Pi packages with the same base version
-are not compatible. Remove the project-local source with:
+fork with extension SDK API version `1`. Pi package versions are product
+metadata rather than the compatibility contract; the extension fails closed
+before registration when the runtime API version is incompatible. Remove the
+project-local source with:
 
 ```bash
 pi remove /absolute/path/to/pi-mcp-adapter -l

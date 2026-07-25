@@ -115,6 +115,7 @@ function createPi() {
   return {
     handlers,
     api: {
+      extensionSdkApiVersion: 1,
       registerTool: vi.fn(),
       registerFlag: vi.fn(),
       registerCommand: vi.fn(),
@@ -148,6 +149,16 @@ describe("mcpAdapter session lifecycle", () => {
     mocks.resolveDirectTools.mockReturnValue([]);
     mocks.getConfigPathFromArgv.mockReturnValue(undefined);
     mocks.truncateAtWord.mockImplementation((text: string) => text);
+  });
+
+  it("fails closed before registration for an incompatible extension SDK", async () => {
+    const { default: mcpAdapter } = await import("../index.ts");
+    const registerTool = vi.fn();
+
+    expect(() =>
+      mcpAdapter({ extensionSdkApiVersion: 2, registerTool } as never),
+    ).toThrow("Pi host is incompatible: requires extension SDK API version 1");
+    expect(registerTool).not.toHaveBeenCalled();
   });
 
   afterEach(() => {

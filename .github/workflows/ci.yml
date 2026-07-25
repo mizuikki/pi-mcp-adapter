@@ -11,7 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PI_FORK_COMMIT: 15702b969be73bf115cdbd4694f1ce89782c62af
+  PI_EXTENSION_SDK_REF: local-fork-extension-unification
+  PI_EXTENSION_SDK_API_VERSION: "1"
 
 jobs:
   test:
@@ -23,13 +24,14 @@ jobs:
           node-version: 22
       - name: Check out local Pi fork
         run: |
-          git clone --filter=blob:none --branch local-fork-extension-unification https://github.com/mizuikki/pi.git ../pi
-          git -C ../pi checkout --detach "$PI_FORK_COMMIT"
+          git clone --filter=blob:none --branch "$PI_EXTENSION_SDK_REF" https://github.com/mizuikki/pi.git ../pi
+          git -C ../pi checkout --detach
       - name: Build local Pi SDK
         run: |
           npm ci --ignore-scripts --prefix ../pi
           PI_SDK_DIR=$(mktemp -d)
-          node ../pi/scripts/pack-local-sdk.mjs --out "$PI_SDK_DIR" --ref "$PI_FORK_COMMIT"
+          PI_EXTENSION_SDK_COMMIT=$(git -C ../pi rev-parse HEAD)
+          node ../pi/scripts/pack-local-sdk.mjs --out "$PI_SDK_DIR" --ref "$PI_EXTENSION_SDK_COMMIT"
           cp -R "$PI_SDK_DIR/pi/packages/tui/dist" ../pi/packages/tui/dist
           cp -R "$PI_SDK_DIR/pi/packages/ai/dist" ../pi/packages/ai/dist
           cp -R "$PI_SDK_DIR/pi/packages/agent/dist" ../pi/packages/agent/dist
@@ -39,4 +41,4 @@ jobs:
       - name: Test
         run: npm test
       - name: Verify local Pi fork contract
-        run: npm run test:pi-fork -- --pi-dir ../pi --pi-ref "$PI_FORK_COMMIT"
+        run: npm run test:pi-fork -- --pi-dir ../pi --pi-ref "$(git -C ../pi rev-parse HEAD)"

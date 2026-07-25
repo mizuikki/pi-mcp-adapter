@@ -101,6 +101,9 @@ let passed = false;
 
 try {
 	const manifest = fixture.manifest;
+  if (manifest.capabilities?.extensionSdkApiVersion !== 1) {
+    throw new Error("Pi SDK manifest requires extension SDK API version 1");
+  }
   cpSync(projectDir, projectCopy, {
     recursive: true,
     filter: (source) => !excludedPaths.has(basename(source)),
