@@ -10,6 +10,10 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PI_EXTENSION_SDK_REF: pi-extension-sdk-v1.0.0
+  PI_EXTENSION_SDK_API_VERSION: "1"
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -18,7 +22,24 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
+      - name: Check out local Pi fork
+        run: |
+          git clone --filter=blob:none --branch "$PI_EXTENSION_SDK_REF" https://github.com/mizuikki/pi.git ../pi
+          git -C ../pi checkout --detach
+          test "$(git -C ../pi rev-parse HEAD)" = "$(git -C ../pi rev-parse "$PI_EXTENSION_SDK_REF^{commit}")"
+      - name: Build local Pi SDK
+        run: |
+          npm ci --ignore-scripts --prefix ../pi
+          PI_SDK_DIR=$(mktemp -d)
+          PI_EXTENSION_SDK_COMMIT=$(git -C ../pi rev-parse HEAD)
+          node ../pi/scripts/pack-local-sdk.mjs --out "$PI_SDK_DIR" --ref "$PI_EXTENSION_SDK_COMMIT"
+          cp -R "$PI_SDK_DIR/pi/packages/tui/dist" ../pi/packages/tui/dist
+          cp -R "$PI_SDK_DIR/pi/packages/ai/dist" ../pi/packages/ai/dist
+          cp -R "$PI_SDK_DIR/pi/packages/agent/dist" ../pi/packages/agent/dist
+          cp -R "$PI_SDK_DIR/pi/packages/coding-agent/dist" ../pi/packages/coding-agent/dist
       - name: Install dependencies
-        run: npm install --ignore-scripts
+        run: npm ci --ignore-scripts
       - name: Test
         run: npm test
+      - name: Verify local Pi fork contract
+        run: npm run test:pi-fork -- --pi-dir ../pi --pi-ref "$(git -C ../pi rev-parse HEAD)"

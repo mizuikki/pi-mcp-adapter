@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createLocalForkFixture, createManifestConsumer } from "../../pi/scripts/local-fork-fixture.mjs";
 
 const projectDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-const excludedPaths = new Set([".git", ".worktrees", "dist", "node_modules", "package-lock.json"]);
+const excludedPaths = new Set([".git", ".worktrees", "dist", "node_modules"]);
 
 function run(command, args, options = {}) {
   console.log(`$ ${[command, ...args].join(" ")}`);
@@ -14,198 +14,128 @@ function run(command, args, options = {}) {
 }
 
 function parseArguments(args) {
-  let piDir;
-  let piRef;
+  let piDir = resolve(projectDir, "../pi");
+  let piRef = "HEAD";
+  let keepTemp = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--pi-dir" || argument === "--pi-ref") {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
-        throw new Error(`${argument} requires a value`);
-      }
+      if (!value || value.startsWith("--")) throw new Error(`${argument} requires a value`);
       if (argument === "--pi-dir") piDir = resolve(value);
-      if (argument === "--pi-ref") piRef = value;
+      else piRef = value;
       index += 1;
       continue;
     }
+    if (argument === "--keep-temp") {
+      keepTemp = true;
+      continue;
+    }
     if (argument === "--help") {
-      console.log("Usage: npm run test:pi-fork -- --pi-dir <pi-checkout> --pi-ref <git-ref>");
+      console.log("Usage: npm run test:pi-fork -- [--pi-dir <pi-checkout>] [--pi-ref <git-ref>] [--keep-temp]");
       process.exit(0);
     }
     throw new Error(`Unknown argument: ${argument}`);
   }
 
-  if (!piDir || !piRef) {
-    throw new Error("Both --pi-dir and --pi-ref are required");
-  }
-  if (!existsSync(join(piDir, ".git"))) {
-    throw new Error(`--pi-dir is not a git checkout: ${piDir}`);
-  }
-
-  return { piDir, piRef };
+  if (!existsSync(join(piDir, ".git"))) throw new Error(`--pi-dir is not a git checkout: ${piDir}`);
+  return { piDir, piRef, keepTemp };
 }
 
-function writeCapabilityProbe(probePath) {
+function installPoisonPackage(projectCopy, packageName) {
+  const packageDir = join(projectCopy, "node_modules", packageName);
+  rmSync(packageDir, { force: true, recursive: true });
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(join(packageDir, "package.json"), JSON.stringify({ name: packageName, type: "module" }));
+  writeFileSync(join(packageDir, "index.js"), `throw new Error(${JSON.stringify(`poison package imported: ${packageName}`)});\n`);
+}
+
+function verifyManifestConsumer(consumerDirectory, manifest) {
+	mkdirSync(consumerDirectory, { recursive: true });
+	const adapterTarball = execFileSync(
+    npm,
+    ["pack", "--json", "--ignore-scripts", "--pack-destination", consumerDirectory],
+    { cwd: projectDir, encoding: "utf8" },
+  );
+	const packResult = JSON.parse(adapterTarball);
+	const filename = (Array.isArray(packResult) ? packResult[0] : Object.values(packResult)[0])?.filename;
+	if (typeof filename !== "string") throw new Error("npm pack returned no adapter tarball");
+	createManifestConsumer(consumerDirectory, manifest, {
+		"pi-mcp-adapter": `file:${join(consumerDirectory, filename)}`,
+	});
+
+  const lockfile = JSON.parse(readFileSync(join(consumerDirectory, "package-lock.json"), "utf8"));
+  for (const { name, tarball } of manifest.packages) {
+    const entry = lockfile.packages?.[`node_modules/${name}`];
+    if (typeof entry?.resolved !== "string" || !entry.resolved.startsWith("file:")) {
+      throw new Error(`Pi package did not resolve from a manifest tarball: ${name}`);
+    }
+	const resolvedTarball = fileURLToPath(
+		new URL(entry.resolved, pathToFileURL(`${resolve(consumerDirectory)}/`)),
+	);
+	if (resolvedTarball !== tarball) {
+      throw new Error(`Pi package resolved from the wrong manifest tarball: ${name}`);
+    }
+  }
+  const probePath = join(consumerDirectory, "verify-sdk.mjs");
   writeFileSync(
     probePath,
     [
-      'import { fileURLToPath } from "node:url";',
-      'import { resolve, sep } from "node:path";',
-      "",
-      "const projectDir = resolve(process.env.PROJECT_COPY_DIR);",
-      "const packageRoot = `${projectDir}${sep}node_modules${sep}`;",
-      "const packages = [",
-      '  "@earendil-works/pi-ai",',
-      '  "@earendil-works/pi-agent-core",',
-      '  "@earendil-works/pi-coding-agent",',
-      '  "@earendil-works/pi-tui",',
-      "];",
-      "",
-      "for (const specifier of packages) {",
-      "  const resolved = await import.meta.resolve(specifier);",
-      "  const resolvedPath = fileURLToPath(resolved);",
-      "  console.log(`resolved ${specifier}: ${resolved}`);",
-      "  if (!resolvedPath.startsWith(packageRoot)) {",
-      "    throw new Error(`module resolved outside isolated project: ${specifier} -> ${resolvedPath}`);",
-      "  }",
+      'import { ModelRegistry } from "@earendil-works/pi-coding-agent";',
+      'import { completeSimple } from "@earendil-works/pi-ai/compat";',
+      'import { Text } from "@earendil-works/pi-tui";',
+      'if (typeof ModelRegistry !== "function" || typeof completeSimple !== "function" || typeof Text !== "function") {',
+      '  throw new Error("private Pi SDK capability probe failed");',
       "}",
-      "",
-      'const codingAgent = await import("@earendil-works/pi-coding-agent");',
-      'const aiCompat = await import("@earendil-works/pi-ai/compat");',
-      'const tui = await import("@earendil-works/pi-tui");',
-      'if (typeof codingAgent.ModelRegistry !== "function") {',
-      '  throw new Error("ModelRegistry export missing from Pi coding agent");',
-      "}",
-      'if (typeof aiCompat.completeSimple !== "function") {',
-      '  throw new Error("completeSimple export missing from Pi AI compat module");',
-      "}",
-      'for (const exportName of ["Text", "matchesKey", "truncateToWidth", "visibleWidth"]) {',
-      '  if (typeof tui[exportName] !== "function") {',
-      '    throw new Error(`${exportName} export missing from Pi TUI`);',
-      "  }",
-      "}",
-      'console.log("capability probe: Pi AI compat, ModelRegistry, and TUI runtime exports confirmed");',
-      "",
     ].join("\n"),
   );
+  run(process.execPath, [probePath], { cwd: consumerDirectory });
 }
 
-function pinPackedPiDependencies(projectPath, packedPackages) {
-  const packageJsonPath = join(projectPath, "package.json");
-  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
-
-  for (const { name, tarball } of packedPackages) {
-    const dependencyGroup = Object.hasOwn(packageJson.dependencies ?? {}, name)
-      ? packageJson.dependencies
-      : (packageJson.devDependencies ??= {});
-    dependencyGroup[name] = `file:${tarball}`;
-  }
-
-  writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
-}
-
-function verifyPackedPiDependencies(projectPath, packedPackages) {
-  const lockfile = JSON.parse(readFileSync(join(projectPath, "package-lock.json"), "utf8"));
-
-  for (const { name, tarball } of packedPackages) {
-    const lockEntry = lockfile.packages?.[`node_modules/${name}`];
-    if (typeof lockEntry?.resolved !== "string" || !lockEntry.resolved.startsWith("file:")) {
-      throw new Error(`Pi package did not resolve from a local tarball: ${name}`);
-    }
-    const resolvedTarball = resolve(projectPath, decodeURIComponent(lockEntry.resolved.slice("file:".length)));
-    if (resolvedTarball !== tarball) {
-      throw new Error(`Pi package resolved from the wrong tarball: ${name} -> ${resolvedTarball}`);
-    }
-    console.log(`packed ${name}: ${lockEntry.resolved}`);
-  }
-}
-
-const { piDir, piRef } = parseArguments(process.argv.slice(2));
-const tempRoot = mkdtempSync(join(tmpdir(), "pi-mcp-adapter-fork-"));
-const forkDir = join(tempRoot, "pi-fork");
-const tarballDir = join(tempRoot, "tarballs");
-const projectCopy = join(tempRoot, "project");
+const { piDir, piRef, keepTemp } = parseArguments(process.argv.slice(2));
+const fixture = createLocalForkFixture({ ref: piRef, piDirectory: piDir, prefix: "pi-local-fork-" });
+const tempRoot = fixture.root;
+const projectCopy = fixture.projectDirectory;
 let passed = false;
 
 try {
-  mkdirSync(forkDir, { recursive: true });
-  mkdirSync(tarballDir, { recursive: true });
-
-  const forkCommit = execFileSync("git", ["-C", piDir, "rev-parse", `${piRef}^{commit}`], {
-    encoding: "utf8",
-  }).trim();
-  const checkedOutCommit = execFileSync("git", ["-C", piDir, "rev-parse", "HEAD"], {
-    encoding: "utf8",
-  }).trim();
-  if (checkedOutCommit !== forkCommit) {
-    throw new Error(`--pi-dir must be checked out at --pi-ref to use its generated AI model data`);
+	const manifest = fixture.manifest;
+  if (manifest.capabilities?.extensionSdkApiVersion !== 1) {
+    throw new Error("Pi SDK manifest requires extension SDK API version 1");
   }
-  const archivePath = join(tempRoot, "pi-fork.tar");
-  run("git", ["-C", piDir, "archive", "--format=tar", "--output", archivePath, piRef]);
-  run("tar", ["-xf", archivePath, "-C", forkDir]);
-  console.log(`Pi fork commit: ${forkCommit} (${piRef})`);
-
-  console.log("Installing Pi fork dependencies in the isolated checkout.");
-  run(npm, ["ci", "--ignore-scripts", "--prefix", forkDir]);
-  run(npm, ["run", "build", "--prefix", join(forkDir, "packages/tui")]);
-  // git archive intentionally omits generated model data. Compile the tagged
-  // source with the selected checkout's existing snapshot, without refreshing
-  // mutable provider catalogs from the network.
-  const modelDataSource = join(piDir, "packages/ai/src/providers/data");
-  const modelDataDestination = join(forkDir, "packages/ai/src/providers/data");
-  if (!existsSync(modelDataSource)) {
-    throw new Error(`Generated AI model data is missing from --pi-dir: ${modelDataSource}`);
-  }
-  cpSync(modelDataSource, modelDataDestination, { recursive: true });
-  run(join(forkDir, "node_modules/.bin/tsgo"), ["-p", join(forkDir, "packages/ai/tsconfig.build.json")]);
-  cpSync(modelDataDestination, join(forkDir, "packages/ai/dist/providers/data"), { recursive: true });
-  run(npm, ["run", "build", "--prefix", join(forkDir, "packages/agent")]);
-  run(npm, ["run", "build", "--prefix", join(forkDir, "packages/coding-agent")]);
-
-  const workspaces = ["tui", "ai", "agent", "coding-agent"];
-  for (const workspace of workspaces) {
-    run(npm, [
-      "pack",
-      "--ignore-scripts",
-      "--pack-destination",
-      tarballDir,
-    ], { cwd: join(forkDir, "packages", workspace), stdio: "ignore" });
-  }
-
-  const packedPackages = workspaces.map((workspace) => {
-    const packageDirectory = join(forkDir, "packages", workspace);
-    const packageJson = JSON.parse(readFileSync(join(packageDirectory, "package.json"), "utf8"));
-    const tarballName = `${packageJson.name.slice(1).replace("/", "-")}-${packageJson.version}.tgz`;
-    return { name: packageJson.name, tarball: join(tarballDir, tarballName) };
-  });
-  for (const { tarball } of packedPackages) {
-    if (!existsSync(tarball)) {
-      throw new Error(`Expected Pi tarball missing: ${tarball}`);
-    }
-  }
-
   cpSync(projectDir, projectCopy, {
     recursive: true,
     filter: (source) => !excludedPaths.has(basename(source)),
   });
 
-  pinPackedPiDependencies(projectCopy, packedPackages);
-  console.log("Installing the isolated adapter copy with Pi dependencies pinned to fork tarballs.");
-  run(npm, ["install", "--ignore-scripts", "--prefix", projectCopy]);
-  verifyPackedPiDependencies(projectCopy, packedPackages);
-
-  const probePath = join(projectCopy, "verify-pi-provenance.mjs");
-  writeCapabilityProbe(probePath);
-  run(process.execPath, [probePath], {
-    env: { ...process.env, PROJECT_COPY_DIR: projectCopy },
-  });
-
+  // The project sits beside the archived checkout before npm resolves its file: dev dependencies.
+  run(npm, ["ci", "--ignore-scripts", "--prefix", projectCopy]);
+  verifyManifestConsumer(join(tempRoot, "consumer"), manifest);
   run(npm, ["test", "--prefix", projectCopy]);
-  console.log(`Pi fork compatibility passed at ${forkCommit}.`);
+
+  for (const packageName of [
+    "@earendil-works/pi-ai",
+    "@earendil-works/pi-coding-agent",
+    "@earendil-works/pi-tui",
+  ]) {
+    installPoisonPackage(projectCopy, packageName);
+  }
+  const loaderProbe = join(tempRoot, "verify-loader.mjs");
+  const hostEntry = pathToFileURL(join(tempRoot, "pi/packages/coding-agent/dist/index.js")).href;
+  writeFileSync(
+    loaderProbe,
+    [
+      `import { discoverAndLoadExtensions } from ${JSON.stringify(hostEntry)};`,
+      `const result = await discoverAndLoadExtensions([${JSON.stringify(join(projectCopy, "index.ts"))}], ${JSON.stringify(projectCopy)}, ${JSON.stringify(join(tempRoot, "agent"))});`,
+      'if (result.errors.length > 0 || result.extensions.length !== 1) throw new Error(result.errors.map((entry) => entry.error).join("; "));',
+    ].join("\n"),
+  );
+  run(process.execPath, [loaderProbe], { cwd: projectCopy });
   passed = true;
+  console.log(`Pi fork compatibility passed at ${manifest.forkCommit}.`);
 } finally {
-  if (passed) {
+  if (passed || !keepTemp) {
     rmSync(tempRoot, { force: true, recursive: true });
   } else {
     console.error(`Pi fork compatibility failed; temporary directory retained at ${tempRoot}`);

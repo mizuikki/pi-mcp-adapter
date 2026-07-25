@@ -12,6 +12,10 @@ import { initializeOAuth, shutdownOAuth } from "./mcp-auth-flow.ts";
 import { createMcpDirectToolCallRenderer, renderMcpProxyToolCall, renderMcpToolResult } from "./tool-result-renderer.ts";
 
 export default function mcpAdapter(pi: ExtensionAPI) {
+  if (pi.extensionSdkApiVersion !== 1) {
+    throw new Error("Pi host is incompatible: requires extension SDK API version 1");
+  }
+
   let state: McpExtensionState | null = null;
   let initPromise: Promise<McpExtensionState> | null = null;
   let lifecycleGeneration = 0;

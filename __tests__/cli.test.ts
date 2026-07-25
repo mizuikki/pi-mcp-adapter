@@ -91,7 +91,7 @@ describe("cli init helper", () => {
     const exitCode = await main(["install"], (line) => logs.push(line), (line) => errors.push(line));
 
     expect(exitCode).toBe(1);
-    expect(errors.join("\n")).toContain("Use `pi install npm:pi-mcp-adapter` instead");
+    expect(errors.join("\n")).toContain("Use `pi install -l /absolute/path/to/pi-mcp-adapter` instead");
     expect(logs).toEqual([]);
   });
 });
