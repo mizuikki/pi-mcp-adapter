@@ -19,10 +19,16 @@ But the MCP ecosystem has useful stuff - databases, browsers, APIs. This adapter
 ## Install
 
 ```bash
-pi install npm:pi-mcp-adapter
+pi install -l /absolute/path/to/pi-mcp-adapter
 ```
 
-Restart Pi after installation. `pi-mcp-adapter` targets Pi `0.81.1` and newer.
+Restart Pi after installation. This extension requires the sibling private Pi
+fork SDK at `0.81.1-local.1`; upstream Pi packages with the same base version
+are not compatible. Remove the project-local source with:
+
+```bash
+pi remove /absolute/path/to/pi-mcp-adapter -l
+```
 
 ## What happens on first run
 
@@ -414,3 +420,20 @@ In interactive sessions, you can also authenticate from `/mcp` with `ctrl+a` or 
 - Cross-session server sharing not yet implemented (each Pi session runs its own server processes)
 - Compact MCP result rendering summarizes text, but inline images are still controlled by Pi's image display settings and may render below the compact text summary.
 - MCP sampling support is text-only; context inclusion, tools, stop sequences, audio, and image content are rejected with explicit errors.
+
+## Development
+
+This repository is one sibling of the local Pi fork setup. Keep `../pi` next to
+this checkout, install development dependencies with `npm install --ignore-scripts`,
+and use Pi source references instead of registry installation. Direct Pi imports
+are peers at runtime and `file:../pi/packages/...` development dependencies only.
+
+Run the fork verification against an immutable, clean Pi commit:
+
+```bash
+npm run test:pi-fork -- --pi-dir ../pi --pi-ref <commit>
+```
+
+It uses Pi's `pi-sdk-manifest.json` and verifies every SDK tarball digest before
+installing a clean consumer. The fixture is a system temporary directory with
+`<temp>/pi` and `<temp>/project`; it is not a repository `tmp/` directory.
