@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  PI_FORK_COMMIT: de0c8472c432ca6561657d20ab7b10413da62cc9
+  PI_FORK_COMMIT: 15702b969be73bf115cdbd4694f1ce89782c62af
 
 jobs:
   test:
@@ -25,11 +25,6 @@ jobs:
         run: |
           git clone --filter=blob:none --branch local-fork-extension-unification https://github.com/mizuikki/pi.git ../pi
           git -C ../pi checkout --detach "$PI_FORK_COMMIT"
-      - name: Build local Pi SDK
-        run: |
-          npm ci --ignore-scripts --prefix ../pi
-          npm run generate:models --prefix ../pi
-          npm run build:offline --prefix ../pi
       - name: Install dependencies
         run: npm ci --ignore-scripts
       - name: Test
