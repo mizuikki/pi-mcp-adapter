@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Pin blocking CI to Pi extension SDK tag `pi-extension-sdk-v1.0.3` (private fork product `0.82.1-local.1`; ABI remains `extensionSdkApiVersion` 1).
 - Target Pi `0.81.1` and route MCP sampling for registered dynamic providers through `ModelRegistry.getRegisteredProviderConfig(...).streamSimple`, falling back to `@earendil-works/pi-ai/compat` `completeSimple` when streaming is unavailable.
 
 ## [2.10.0] - 2026-06-13
