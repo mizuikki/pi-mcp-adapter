@@ -109,6 +109,23 @@ function createStreamResult(message: AssistantMessage) {
   };
 }
 
+function createAssistantResult(
+  stopReason: AssistantMessage["stopReason"],
+  errorMessage?: string,
+): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "Bonjour" }],
+    api: "anthropic-messages",
+    provider: "anthropic",
+    model: "claude-sonnet",
+    usage,
+    stopReason,
+    ...(errorMessage ? { errorMessage } : {}),
+    timestamp: 1,
+  };
+}
+
 describe("sampling handler", () => {
   beforeEach(() => {
     mocks.completeSimple.mockReset().mockResolvedValue({
@@ -161,6 +178,56 @@ describe("sampling handler", () => {
       model: "anthropic/claude-sonnet",
       stopReason: "endTurn",
     });
+  });
+
+  it("maps terminal Pi stop reasons to MCP sampling results", async () => {
+    const { handleSamplingRequest } = await import("../sampling-handler.ts");
+    const terminalReasons = [
+      ["stop", "endTurn"],
+      ["length", "maxTokens"],
+      ["toolUse", "toolUse"],
+    ] as const;
+
+    for (const [stopReason, expectedStopReason] of terminalReasons) {
+      mocks.completeSimple.mockResolvedValueOnce(createAssistantResult(stopReason));
+      await expect(handleSamplingRequest(createOptions(), createSamplingRequest({
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        maxTokens: 50,
+      }))).resolves.toMatchObject({
+        content: { type: "text", text: "Bonjour" },
+        stopReason: expectedStopReason,
+      });
+    }
+  });
+
+  it("rejects pending sampling before response approval", async () => {
+    const { handleSamplingRequest } = await import("../sampling-handler.ts");
+    const ui = { confirm: vi.fn(async () => true) };
+    mocks.completeSimple.mockResolvedValueOnce(createAssistantResult("pending"));
+
+    await expect(handleSamplingRequest(
+      createOptions({ autoApprove: false, ui }),
+      createSamplingRequest({
+        messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+        maxTokens: 50,
+      }),
+    )).rejects.toThrow("pending");
+
+    expect(ui.confirm).toHaveBeenCalledTimes(1);
+    expect(ui.confirm.mock.calls[0][0]).toBe("Approve MCP sampling request");
+  });
+
+  it.each([
+    ["error", "provider failed"],
+    ["aborted", "request cancelled"],
+  ] as const)("rejects %s sampling results", async (stopReason, errorMessage) => {
+    const { handleSamplingRequest } = await import("../sampling-handler.ts");
+    mocks.completeSimple.mockResolvedValueOnce(createAssistantResult(stopReason, errorMessage));
+
+    await expect(handleSamplingRequest(createOptions(), createSamplingRequest({
+      messages: [{ role: "user", content: { type: "text", text: "Hello" } }],
+      maxTokens: 50,
+    }))).rejects.toThrow(errorMessage);
   });
 
   it("routes registered dynamic providers through streamSimple", async () => {
