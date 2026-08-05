@@ -12,3 +12,9 @@ worker-*.md
 plan.md
 triage-*.md
 review-*.md
+
+# Test
+.agents/
+.codex/
+.pi/
+.trellis/
