@@ -6,7 +6,7 @@ import { createLocalForkFixture, createManifestConsumer } from "../../pi/scripts
 
 const projectDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-const excludedPaths = new Set([".git", ".worktrees", "dist", "node_modules"]);
+const excludedPaths = new Set([".git", ".worktrees", ".pi", ".trellis", "dist", "node_modules"]);
 
 function run(command, args, options = {}) {
   console.log(`$ ${[command, ...args].join(" ")}`);

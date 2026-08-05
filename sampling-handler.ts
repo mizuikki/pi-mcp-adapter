@@ -239,12 +239,15 @@ function convertAssistantContent(block: SamplingMessageContentBlock): TextConten
 }
 
 function convertAssistantResult(message: AssistantMessage): CreateMessageResult {
-  if (message.stopReason === "error") {
+  const reason = message.stopReason;
+  if (reason === "error") {
     throw new Error(message.errorMessage ?? "MCP sampling model call failed");
   }
-  if (message.stopReason === "aborted") {
+  if (reason === "aborted") {
     throw new Error(message.errorMessage ?? "MCP sampling model call was aborted");
   }
+
+  const stopReason = mapStopReason(reason);
 
   const text = message.content
     .map((block) => {
@@ -264,15 +267,25 @@ function convertAssistantResult(message: AssistantMessage): CreateMessageResult 
     role: "assistant",
     content: { type: "text", text },
     model: `${message.provider}/${message.model}`,
-    stopReason: mapStopReason(message.stopReason),
+    stopReason,
   };
 }
 
-function mapStopReason(reason: AssistantMessage["stopReason"]): CreateMessageResult["stopReason"] {
-  if (reason === "stop") return "endTurn";
-  if (reason === "length") return "maxTokens";
-  if (reason === "toolUse") return "toolUse";
-  return reason;
+function mapStopReason(
+  reason: Exclude<AssistantMessage["stopReason"], "error" | "aborted">,
+): CreateMessageResult["stopReason"] {
+  switch (reason) {
+    case "stop":
+      return "endTurn";
+    case "length":
+      return "maxTokens";
+    case "toolUse":
+      return "toolUse";
+    case "pending":
+      throw new Error("MCP sampling model call is still pending");
+    default:
+      throw new Error(`MCP sampling result has unsupported stop reason: ${String(reason)}`);
+  }
 }
 
 function zeroUsage(): AssistantMessage["usage"] {
